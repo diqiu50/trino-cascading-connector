@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<!--
+Copyright 2024 Datastrato
+
+Licensed under the Server Side Public License, v 1. You may not use this file
+except in compliance with the Server Side Public License, v 1.
+-->
+
+<!DOCTYPE suppressions PUBLIC
+		"-//Puppy Crawl//DTD Suppressions 1.1//EN"
+		"http://www.puppycrawl.com/dtds/suppressions_1_1.dtd">
+
+<suppressions>
+		<!-- target directory is not relevant for checkstyle -->
+		<suppress
+			files="[\\/]target[\\/]"
+			checks=".*"/>
+</suppressions>

@@ -1,0 +1,7 @@
+#
+# Copyright 2024 Datastrato
+#
+# Licensed under the Server Side Public License, v 1. You may not use this file
+# except in compliance with the Server Side Public License, v 1.
+
+com.datastrato.trino.connector.cluster.TrinoClusterPlugin
