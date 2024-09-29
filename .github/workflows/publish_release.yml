@@ -16,8 +16,15 @@ jobs:
   build-and-publish-release:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    if: github.ref_name != 'main' && github.event.inputs.release_token == ${{ secrets.RELEASE_TOKEN }}    
+    if: github.ref_name != 'main'
     steps:
+      - name: Check release token
+        run: |
+          if [ "${{ github.event.inputs.token }}" != ${{ secrets.RELEASE_TOKEN }} ]; then
+            echo "Invalid release token provided."
+            exit 1
+          fi
+
       - uses: actions/checkout@v3
 
       - name: Set up JDK
@@ -48,5 +55,5 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file_glob: true
-          file: target/package/*.zip.*
+          file: target/package/*.zip*
           tag: ${{ github.ref }}
