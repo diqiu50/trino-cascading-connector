@@ -16,7 +16,7 @@ jobs:
   build-and-publish-release:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    if: github.ref_name != 'main' && github.event.inputs.release_token == ${{secrets.RELEASE_TOKEN}}    
+    if: github.ref_name != 'main' && github.event.inputs.release_token == ${{ secrets.RELEASE_TOKEN }}    
     steps:
       - uses: actions/checkout@v3
 
