@@ -408,7 +408,6 @@ except in compliance with the Server Side Public License, v 1.
                     </execution>
                 </executions>
             </plugin>
-
         </plugins>
     </build>
 
