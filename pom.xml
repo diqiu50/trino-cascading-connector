@@ -359,6 +359,7 @@ except in compliance with the Server Side Public License, v 1.
                     </execution>
                 </executions>
             </plugin>
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-resources-plugin</artifactId>
