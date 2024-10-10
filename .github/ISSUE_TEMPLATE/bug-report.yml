@@ -8,16 +8,9 @@ body:
     id: version
     attributes:
       label: Version
-      description: What version of Gravitino are you running?
+      description: What version of the Trino cascading connector are you running?
       options:
         - main branch
-        - 0.6.0
-        - 0.5.1
-        - 0.5.0
-        - 0.4.0
-        - 0.3.1
-        - 0.3.0
-        - 0.2.0
       default: 0
     validations:
       required: true
@@ -42,7 +35,7 @@ body:
     attributes:
       label: How to reproduce
       placeholder: >
-        + Which Gravitino version to use
+        + Which Trino cascading connector version to use
     validations:
       required: true
 

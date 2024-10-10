@@ -1,6 +1,6 @@
 name: Feature Request
 title: "[FEATURE] "
-description: Suggest an idea for Gravitino
+description: Suggest an idea for Trino cascading connector
 labels: [ "feature" ]
 body:
 
