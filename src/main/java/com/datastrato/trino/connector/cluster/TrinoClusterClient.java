@@ -6,9 +6,11 @@
  */
 package com.datastrato.trino.connector.cluster;
 
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableSet;
 import com.google.inject.Inject;
 import io.airlift.log.Logger;
+import io.trino.jdbc.TrinoDriver;
 import io.trino.plugin.base.aggregation.AggregateFunctionRewriter;
 import io.trino.plugin.base.aggregation.AggregateFunctionRule;
 import io.trino.plugin.base.expression.ConnectorExpressionRewriter;
@@ -17,10 +19,12 @@ import io.trino.plugin.jdbc.BaseJdbcClient;
 import io.trino.plugin.jdbc.BaseJdbcConfig;
 import io.trino.plugin.jdbc.ColumnMapping;
 import io.trino.plugin.jdbc.ConnectionFactory;
+import io.trino.plugin.jdbc.DriverConnectionFactory;
 import io.trino.plugin.jdbc.JdbcColumnHandle;
 import io.trino.plugin.jdbc.JdbcExpression;
 import io.trino.plugin.jdbc.JdbcJoinCondition;
 import io.trino.plugin.jdbc.JdbcSortItem;
+import io.trino.plugin.jdbc.JdbcSplit;
 import io.trino.plugin.jdbc.JdbcStatisticsConfig;
 import io.trino.plugin.jdbc.JdbcTableHandle;
 import io.trino.plugin.jdbc.JdbcTypeHandle;
@@ -41,6 +45,8 @@ import io.trino.plugin.jdbc.aggregation.ImplementStddevSamp;
 import io.trino.plugin.jdbc.aggregation.ImplementSum;
 import io.trino.plugin.jdbc.aggregation.ImplementVariancePop;
 import io.trino.plugin.jdbc.aggregation.ImplementVarianceSamp;
+import io.trino.plugin.jdbc.credential.DefaultCredentialPropertiesProvider;
+import io.trino.plugin.jdbc.credential.StaticCredentialProvider;
 import io.trino.plugin.jdbc.expression.JdbcConnectorExpressionRewriterBuilder;
 import io.trino.plugin.jdbc.expression.ParameterizedExpression;
 import io.trino.plugin.jdbc.logging.RemoteQueryModifier;
@@ -48,11 +54,14 @@ import io.trino.spi.TrinoException;
 import io.trino.spi.connector.AggregateFunction;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ConnectorSession;
+import io.trino.spi.connector.ConnectorSplitSource;
+import io.trino.spi.connector.FixedSplitSource;
 import io.trino.spi.connector.JoinCondition;
 import io.trino.spi.connector.JoinStatistics;
 import io.trino.spi.connector.JoinType;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.expression.ConnectorExpression;
+import io.trino.spi.predicate.TupleDomain;
 import io.trino.spi.statistics.TableStatistics;
 import io.trino.spi.type.CharType;
 import io.trino.spi.type.DecimalType;
@@ -72,10 +81,13 @@ import java.sql.SQLException;
 import java.sql.Types;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Properties;
 import java.util.function.BiFunction;
 import java.util.stream.Stream;
 
@@ -161,6 +173,8 @@ public class TrinoClusterClient extends BaseJdbcClient {
     private final ConnectorExpressionRewriter<ParameterizedExpression> connectorExpressionRewriter;
     private final AggregateFunctionRewriter<JdbcExpression, ?> aggregateFunctionRewriter;
 
+    private final Map<String, ConnectionFactory> trinoClusterUrls = new HashMap<>();
+
     @Inject
     public TrinoClusterClient(
             BaseJdbcConfig config,
@@ -169,7 +183,8 @@ public class TrinoClusterClient extends BaseJdbcClient {
             QueryBuilder queryBuilder,
             TypeManager typeManager,
             IdentifierMapping identifierMapping,
-            RemoteQueryModifier queryModifier) {
+            RemoteQueryModifier queryModifier,
+            TrinoClusterConfig trinoClusterConfig) {
         super(
                 "\"",
                 connectionFactory,
@@ -178,6 +193,17 @@ public class TrinoClusterClient extends BaseJdbcClient {
                 identifierMapping,
                 queryModifier,
                 true);
+
+        if (!trinoClusterConfig.getClusterConnectionNames().isEmpty() && !trinoClusterConfig.getClusterConnectionUrls().isEmpty()) {
+            String[] names = trinoClusterConfig.getClusterConnectionNames().split("\\s*,\\s*");
+            String[] urls = trinoClusterConfig.getClusterConnectionUrls().split("\\s*,\\s*");
+            for (int i = 0; i < names.length; i++) {
+                ConnectionFactory factory = new DriverConnectionFactory(
+                        new TrinoDriver(),
+                        urls[i], new Properties(), StaticCredentialProvider.of("admin", ""));
+                trinoClusterUrls.put(names[i], factory);
+            }
+        }
 
         this.connectorExpressionRewriter =
                 JdbcConnectorExpressionRewriterBuilder.newBuilder()
@@ -238,7 +264,10 @@ public class TrinoClusterClient extends BaseJdbcClient {
             List<AggregateFunction> aggregates,
             Map<String, ColumnHandle> assignments,
             List<List<ColumnHandle>> groupingSets) {
-        return preventTextualTypeAggregationPushdown(groupingSets);
+        if (trinoClusterUrls.isEmpty()) {
+            return true;
+        }
+        return false;
     }
 
     private static Optional<JdbcTypeHandle> toTypeHandle(DecimalType decimalType) {
@@ -326,7 +355,7 @@ public class TrinoClusterClient extends BaseJdbcClient {
         }
 
         switch (typeHandle.getJdbcType()) {
-            case Types.BIT:
+            case Types.BOOLEAN:
                 return Optional.of(booleanColumnMapping());
 
             case Types.TINYINT:
@@ -690,7 +719,12 @@ public class TrinoClusterClient extends BaseJdbcClient {
     @Override
     protected boolean isSupportedJoinCondition(
             ConnectorSession session, JdbcJoinCondition joinCondition) {
-        return joinCondition.getOperator() != JoinCondition.Operator.IS_DISTINCT_FROM;
+        if (trinoClusterUrls.isEmpty()) {
+            return joinCondition.getOperator() != JoinCondition.Operator.IS_DISTINCT_FROM;
+        }
+        else {
+            return false;
+        }
     }
 
     @Override
@@ -769,5 +803,27 @@ public class TrinoClusterClient extends BaseJdbcClient {
     @Override
     public boolean isTopNGuaranteed(ConnectorSession session) {
         return true;
+    }
+
+    @Override
+    public ConnectorSplitSource getSplits(ConnectorSession session, JdbcTableHandle tableHandle) {
+        if (trinoClusterUrls.isEmpty()) {
+            return new FixedSplitSource(new JdbcSplit(Optional.empty()));
+        } else {
+            List<JdbcSplit> splits = new ArrayList<>();
+            for (String key : trinoClusterUrls.keySet()) {
+                splits.add(new JdbcSplit(Optional.empty(), TupleDomain.all(), key));
+            }
+            return new FixedSplitSource(splits);
+        }
+    }
+
+    @Override
+    public Connection getConnection(ConnectorSession session, JdbcSplit split, JdbcTableHandle tableHandle) throws SQLException {
+        if (!split.getClusterName().isEmpty()) {
+            ConnectionFactory factory = trinoClusterUrls.get(split.getClusterName());
+            return factory.openConnection(session);
+        }
+        return super.getConnection(session, split, tableHandle);
     }
 }

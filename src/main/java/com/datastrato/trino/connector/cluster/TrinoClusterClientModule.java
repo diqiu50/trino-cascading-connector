@@ -67,6 +67,7 @@ public class TrinoClusterClientModule extends AbstractConfigurationAwareModule {
     }
 
     public static Properties getConnectionProperties(TrinoClusterConfig trinoClusterConfig) {
-        return new Properties();
+        Properties properties = new Properties();
+        return properties;
     }
 }

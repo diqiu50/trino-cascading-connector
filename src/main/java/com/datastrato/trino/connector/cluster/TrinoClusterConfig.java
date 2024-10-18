@@ -17,6 +17,9 @@ public class TrinoClusterConfig {
     private int maxReconnects = 3;
     private Duration connectionTimeout = new Duration(10, TimeUnit.SECONDS);
 
+    private String urls = "";
+    private String names = "";
+
     public boolean isAutoReconnect() {
         return autoReconnect;
     }
@@ -46,5 +49,25 @@ public class TrinoClusterConfig {
     public TrinoClusterConfig setConnectionTimeout(Duration connectionTimeout) {
         this.connectionTimeout = connectionTimeout;
         return this;
+    }
+
+    @Config("trino.cluster.connection-urls")
+    public TrinoClusterConfig setClusterConnectionUrls(String urls) {
+        this.urls = urls;
+        return this;
+    }
+
+    public String getClusterConnectionUrls() {
+        return urls;
+    }
+
+    @Config("trino.cluster.names")
+    public TrinoClusterConfig setClusterConnectionNames(String names) {
+        this.names = names;
+        return this;
+    }
+
+    public String getClusterConnectionNames() {
+        return names;
     }
 }
