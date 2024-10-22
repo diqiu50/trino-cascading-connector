@@ -163,6 +163,7 @@ public class TrinoClusterClient extends BaseJdbcClient {
     private static final int ZERO_PRECISION_TIMESTAMP_COLUMN_SIZE = 19;
     private static final int ZERO_PRECISION_TIME_COLUMN_SIZE = 8;
     private static final int DEFAULT_TIME_PRECISION = 3;
+    private static final int MAX_TIME_PRECISION = 9;
 
     private final ConnectorExpressionRewriter<ParameterizedExpression> connectorExpressionRewriter;
     private final AggregateFunctionRewriter<JdbcExpression, ?> aggregateFunctionRewriter;
@@ -439,7 +440,7 @@ public class TrinoClusterClient extends BaseJdbcClient {
                         createTimeType(getTimePrecision(typeHandle.getRequiredColumnSize()));
                 requireNonNull(timeType, "timeType is null");
                 checkArgument(
-                        timeType.getPrecision() <= 9, "Unsupported type precision: %s", timeType);
+                        timeType.getPrecision() <= MAX_TIME_PRECISION, "Unsupported type precision: %s", timeType);
                 return Optional.of(
                         ColumnMapping.longMapping(
                                 timeType,
@@ -478,7 +479,7 @@ public class TrinoClusterClient extends BaseJdbcClient {
 
     public static LongReadFunction timeReadFunction(TimeType timeType)
     {
-        checkArgument(timeType.getPrecision() <= 9, "Unsupported type precision: %s", timeType);
+        checkArgument(timeType.getPrecision() <= MAX_TIME_PRECISION, "Unsupported type precision: %s", timeType);
         return (resultSet, columnIndex) -> {
             Time time = resultSet.getObject(columnIndex, Time.class);
             long nanosOfDay = time.toLocalTime().toNanoOfDay();
