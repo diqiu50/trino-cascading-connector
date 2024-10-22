@@ -8,6 +8,7 @@ package com.datastrato.trino.connector.cluster;
 
 import io.trino.Session;
 import io.trino.testing.BaseConnectorTest;
+import io.trino.testing.DistributedQueryRunner;
 import io.trino.testing.MaterializedResult;
 import io.trino.testing.QueryRunner;
 import io.trino.testing.TestingConnectorBehavior;
@@ -15,16 +16,26 @@ import org.junit.Ignore;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.ZonedDateTime;
 
 import static io.trino.testing.MaterializedResult.resultBuilder;
 import static io.trino.testing.TestingSession.testSessionBuilder;
 import static org.assertj.core.api.Assertions.assertThat;
 
 public class TrinoClusterConnectorTest extends BaseConnectorTest {
+
+    private TestingTrinoServer testingTrinoServer;
+    private Session session = createSession("trino_memory", "test");
+
     @Override
     protected QueryRunner createQueryRunner() throws Exception {
-        TestingTrinoServer testingTrinoServer = closeAfterClass(new TestingTrinoServer());
-        return TrinoClusterQueryRunner.createQueryRunner(testingTrinoServer, REQUIRED_TPCH_TABLES);
+        testingTrinoServer = closeAfterClass(new TestingTrinoServer());
+        DistributedQueryRunner queryRunner = TrinoClusterQueryRunner.createQueryRunner(testingTrinoServer, REQUIRED_TPCH_TABLES);
+
+        //create schema and use it by default
+        testingTrinoServer.execute("CREATE SCHEMA memory.test");
+        testingTrinoServer.execute("USE memory.test");
+        return queryRunner;
     }
 
     @Override
@@ -158,10 +169,44 @@ public class TrinoClusterConnectorTest extends BaseConnectorTest {
     }
 
     private Session createSession(String schemaName) {
+        return createSession("trino_tpcds", schemaName);
+    }
+
+    private Session createSession(String catalogName, String schemaName) {
         return testSessionBuilder()
                 .setSource("test")
-                .setCatalog("trino_tpcds")
+                .setCatalog(catalogName)
                 .setSchema(schemaName)
                 .build();
+    }
+
+    @Test
+    public void testDataType() {
+        testingTrinoServer.execute("CREATE TABLE test01(col1 BOOLEAN, col2 TINYINT, col3 SMALLINT, col4 INTEGER, col5 BIGINT)");
+        testingTrinoServer.execute("INSERT INTO test01 VALUES(true, 1, 1, 1, 1)");
+        assertQuery(session, "SELECT * FROM test01", "VALUES (true, 1, 1, 1, 1)");
+
+        testingTrinoServer.execute("CREATE TABLE test02(col1 REAL, col2 DOUBLE, col3 DECIMAL(10, 5))");
+        testingTrinoServer.execute("INSERT INTO test02 VALUES(1.0, 1.0, 1.0)");
+        assertQuery(session, "SELECT * FROM test02", "VALUES (1.0, 1.0, 1.0)");
+
+        testingTrinoServer.execute("CREATE TABLE test03(col1 VARCHAR, col2 VARCHAR(200), col3 CHAR, col4 CHAR(10), col5 VARBINARY)");
+        testingTrinoServer.execute("INSERT INTO test03 VALUES('test', 'test', 't', 'test', X'01')");
+        assertQuery(session, "SELECT * FROM test03", "VALUES ('test', 'test', 't', 'test      ', X'01')");
+
+        testingTrinoServer.execute("CREATE TABLE test04(col1 DATE, col2 TIME, col3 TIMESTAMP)");
+        testingTrinoServer.execute("INSERT INTO test04 VALUES(DATE '2021-01-01', TIME '00:00:00', TIMESTAMP '2021-01-01 00:00:00')");
+        assertQuery(session, "SELECT * FROM test04", "VALUES (DATE '2021-01-01', TIME '00:00:00', TIMESTAMP '2021-01-01 00:00:00')");
+    }
+
+    @Test
+    public void testTimestampWithTimeZone() {
+        testingTrinoServer.execute("CREATE TABLE test05(col1 TIMESTAMP WITH TIME ZONE)");
+        testingTrinoServer.execute("INSERT INTO test05 VALUES(TIMESTAMP '2021-01-01 00:00:00 +08:00')");
+        MaterializedResult actual = computeActual(session, "SELECT * FROM test05");
+        MaterializedResult except = resultBuilder(getSession(), actual.getTypes())
+                .row(ZonedDateTime.parse("2020-12-31T16:00Z[UTC]"))
+                .build();
+        assertThat(actual).containsExactlyElementsOf(except);
     }
 }

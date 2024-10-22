@@ -25,6 +25,7 @@ public class TestingTrinoServer implements Closeable {
             DockerImageName.parse("trinodb/trino").withTag("435");
 
     private final TrinoContainer dockerContainer;
+    private final Connection connection;
 
     public TestingTrinoServer() {
         this(TRINO_IMAGE);
@@ -41,15 +42,22 @@ public class TestingTrinoServer implements Closeable {
                                                 new ExposedPort(8080))));
         dockerContainer.withUsername("admin");
         dockerContainer.start();
+        connection = createConnection();
+    }
+
+    private Connection createConnection() {
+        try {
+            return DriverManager.getConnection(
+                    dockerContainer.getJdbcUrl(),
+                    dockerContainer.getUsername(),
+                    dockerContainer.getPassword());
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to create connection", e);
+        }
     }
 
     public void execute(String sql) {
-        try (Connection connection =
-                        DriverManager.getConnection(
-                                dockerContainer.getJdbcUrl(),
-                                dockerContainer.getUsername(),
-                                dockerContainer.getPassword());
-                Statement statement = connection.createStatement()) {
+        try (Statement statement = connection.createStatement()) {
             statement.execute(sql);
         } catch (Exception e) {
             throw new RuntimeException("Failed to execute statement: " + sql, e);
@@ -65,6 +73,13 @@ public class TestingTrinoServer implements Closeable {
     @Override
     public void close() {
         dockerContainer.stop();
+        if (connection != null) {
+            try {
+                connection.close();
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to close connection", e);
+            }
+        }
     }
 
     @ResourcePresence

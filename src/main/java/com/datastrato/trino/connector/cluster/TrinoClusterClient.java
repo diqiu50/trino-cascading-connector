@@ -24,6 +24,7 @@ import io.trino.plugin.jdbc.JdbcSortItem;
 import io.trino.plugin.jdbc.JdbcStatisticsConfig;
 import io.trino.plugin.jdbc.JdbcTableHandle;
 import io.trino.plugin.jdbc.JdbcTypeHandle;
+import io.trino.plugin.jdbc.LongReadFunction;
 import io.trino.plugin.jdbc.LongWriteFunction;
 import io.trino.plugin.jdbc.ObjectReadFunction;
 import io.trino.plugin.jdbc.ObjectWriteFunction;
@@ -69,9 +70,10 @@ import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Time;
+import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -108,12 +110,11 @@ import static io.trino.plugin.jdbc.StandardColumnMappings.realWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.shortDecimalWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.smallintColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.smallintWriteFunction;
-import static io.trino.plugin.jdbc.StandardColumnMappings.timeReadFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.timeWriteFunction;
-import static io.trino.plugin.jdbc.StandardColumnMappings.timestampReadFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.timestampWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.tinyintColumnMapping;
 import static io.trino.plugin.jdbc.StandardColumnMappings.tinyintWriteFunction;
+import static io.trino.plugin.jdbc.StandardColumnMappings.toTrinoTimestamp;
 import static io.trino.plugin.jdbc.StandardColumnMappings.varbinaryReadFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.varbinaryWriteFunction;
 import static io.trino.plugin.jdbc.StandardColumnMappings.varcharReadFunction;
@@ -124,6 +125,7 @@ import static io.trino.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.trino.spi.type.BigintType.BIGINT;
 import static io.trino.spi.type.BooleanType.BOOLEAN;
 import static io.trino.spi.type.CharType.createCharType;
+import static io.trino.spi.type.DateTimeEncoding.packDateTimeWithZone;
 import static io.trino.spi.type.DateTimeEncoding.unpackMillisUtc;
 import static io.trino.spi.type.DateType.DATE;
 import static io.trino.spi.type.DecimalType.createDecimalType;
@@ -136,8 +138,11 @@ import static io.trino.spi.type.TimeZoneKey.UTC_KEY;
 import static io.trino.spi.type.TimestampType.createTimestampType;
 import static io.trino.spi.type.TimestampWithTimeZoneType.createTimestampWithTimeZoneType;
 import static io.trino.spi.type.Timestamps.MILLISECONDS_PER_SECOND;
+import static io.trino.spi.type.Timestamps.NANOSECONDS_PER_DAY;
 import static io.trino.spi.type.Timestamps.NANOSECONDS_PER_MILLISECOND;
+import static io.trino.spi.type.Timestamps.PICOSECONDS_PER_DAY;
 import static io.trino.spi.type.Timestamps.PICOSECONDS_PER_NANOSECOND;
+import static io.trino.spi.type.Timestamps.round;
 import static io.trino.spi.type.TinyintType.TINYINT;
 import static io.trino.spi.type.VarbinaryType.VARBINARY;
 import static io.trino.spi.type.VarcharType.createUnboundedVarcharType;
@@ -157,6 +162,7 @@ public class TrinoClusterClient extends BaseJdbcClient {
     private static final int MAX_SUPPORTED_DATE_TIME_PRECISION = 6;
     private static final int ZERO_PRECISION_TIMESTAMP_COLUMN_SIZE = 19;
     private static final int ZERO_PRECISION_TIME_COLUMN_SIZE = 8;
+    private static final int DEFAULT_TIME_PRECISION = 3;
 
     private final ConnectorExpressionRewriter<ParameterizedExpression> connectorExpressionRewriter;
     private final AggregateFunctionRewriter<JdbcExpression, ?> aggregateFunctionRewriter;
@@ -238,7 +244,7 @@ public class TrinoClusterClient extends BaseJdbcClient {
             List<AggregateFunction> aggregates,
             Map<String, ColumnHandle> assignments,
             List<List<ColumnHandle>> groupingSets) {
-        return preventTextualTypeAggregationPushdown(groupingSets);
+        return true;
     }
 
     private static Optional<JdbcTypeHandle> toTypeHandle(DecimalType decimalType) {
@@ -326,7 +332,7 @@ public class TrinoClusterClient extends BaseJdbcClient {
         }
 
         switch (typeHandle.getJdbcType()) {
-            case Types.BIT:
+            case Types.BOOLEAN:
                 return Optional.of(booleanColumnMapping());
 
             case Types.TINYINT:
@@ -442,8 +448,7 @@ public class TrinoClusterClient extends BaseJdbcClient {
 
             case Types.TIMESTAMP:
                 TimestampType timestampType =
-                        createTimestampType(
-                                getTimestampPrecision(typeHandle.getRequiredColumnSize()));
+                        createTimestampType(typeHandle.getDecimalDigits().orElse(DEFAULT_TIME_PRECISION));
                 return Optional.of(
                         ColumnMapping.longMapping(
                                 timestampType,
@@ -451,14 +456,18 @@ public class TrinoClusterClient extends BaseJdbcClient {
                                 timestampWriteFunction(timestampType)));
 
             case Types.TIMESTAMP_WITH_TIMEZONE:
-                TimestampWithTimeZoneType timestampWithTimeZoneType =
-                        createTimestampWithTimeZoneType(
-                                getTimestampPrecision(typeHandle.getRequiredColumnSize()));
-                return Optional.of(
-                        ColumnMapping.objectMapping(
-                                timestampWithTimeZoneType,
-                                longTimestampWithTimeZoneReadFunction(),
-                                longTimestampWithTimeZoneWriteFunction()));
+                TimestampWithTimeZoneType trinoType =
+                        createTimestampWithTimeZoneType(typeHandle.getDecimalDigits().orElse(DEFAULT_TIME_PRECISION));
+                if (trinoType.getPrecision() <= TimestampWithTimeZoneType.MAX_SHORT_PRECISION) {
+                    return Optional.of(ColumnMapping.longMapping(
+                            trinoType,
+                            shortTimestampWithTimeZoneReadFunction(),
+                            shortTimestampWithTimeZoneWriteFunction()));
+                }
+                return Optional.of(ColumnMapping.objectMapping(
+                        trinoType,
+                        longTimestampWithTimeZoneReadFunction(),
+                        longTimestampWithTimeZoneWriteFunction()));
         }
 
         if (getUnsupportedTypeHandling(session) == CONVERT_TO_VARCHAR) {
@@ -467,15 +476,48 @@ public class TrinoClusterClient extends BaseJdbcClient {
         return Optional.empty();
     }
 
+    public static LongReadFunction timeReadFunction(TimeType timeType)
+    {
+        checkArgument(timeType.getPrecision() <= 9, "Unsupported type precision: %s", timeType);
+        return (resultSet, columnIndex) -> {
+            Time time = resultSet.getObject(columnIndex, Time.class);
+            long nanosOfDay = time.toLocalTime().toNanoOfDay();
+            verify(nanosOfDay < NANOSECONDS_PER_DAY, "Invalid value of nanosOfDay: %s", nanosOfDay);
+            long picosOfDay = nanosOfDay * PICOSECONDS_PER_NANOSECOND;
+            long rounded = round(picosOfDay, 12 - timeType.getPrecision());
+            if (rounded == PICOSECONDS_PER_DAY) {
+                rounded = 0;
+            }
+            return rounded;
+        };
+    }
+
+    private static LongReadFunction timestampReadFunction(TimestampType timestampType) {
+        checkArgument(timestampType.getPrecision() <= TimestampType.MAX_SHORT_PRECISION,
+                "Precision is out of range: %s", timestampType.getPrecision());
+        return (resultSet, columnIndex) -> {
+            Timestamp timestamp = resultSet.getObject(columnIndex, Timestamp.class);
+            return toTrinoTimestamp(timestampType, timestamp.toLocalDateTime());
+        };
+    }
+
+    private static LongReadFunction shortTimestampWithTimeZoneReadFunction()
+    {
+        return (resultSet, columnIndex) -> {
+            Timestamp timestamp = resultSet.getTimestamp(columnIndex);
+            long millisUtc = timestamp.getTime();
+            return packDateTimeWithZone(millisUtc, UTC_KEY);
+        };
+    }
+
     private static ObjectReadFunction longTimestampWithTimeZoneReadFunction() {
         return ObjectReadFunction.of(
                 LongTimestampWithTimeZone.class,
                 (resultSet, columnIndex) -> {
-                    OffsetDateTime offsetDateTime =
-                            resultSet.getObject(columnIndex, OffsetDateTime.class);
+                    Timestamp timestamp = resultSet.getObject(columnIndex, Timestamp.class);
                     return LongTimestampWithTimeZone.fromEpochSecondsAndFraction(
-                            offsetDateTime.toEpochSecond(),
-                            (long) offsetDateTime.getNano() * PICOSECONDS_PER_NANOSECOND,
+                            timestamp.toInstant().getEpochSecond(),
+                            (long) timestamp.toInstant().getNano() * PICOSECONDS_PER_NANOSECOND,
                             UTC_KEY);
                 });
     }
@@ -499,19 +541,6 @@ public class TrinoClusterClient extends BaseJdbcClient {
                     Instant instantValue = Instant.ofEpochSecond(epochSeconds, nanosOfSecond);
                     statement.setObject(index, instantValue);
                 });
-    }
-
-    private static int getTimestampPrecision(int timestampColumnSize) {
-        if (timestampColumnSize == ZERO_PRECISION_TIMESTAMP_COLUMN_SIZE) {
-            return 0;
-        }
-        int timestampPrecision = timestampColumnSize - ZERO_PRECISION_TIMESTAMP_COLUMN_SIZE - 1;
-        verify(
-                1 <= timestampPrecision && timestampPrecision <= MAX_SUPPORTED_DATE_TIME_PRECISION,
-                "Unexpected timestamp precision %s calculated from timestamp column size %s",
-                timestampPrecision,
-                timestampColumnSize);
-        return timestampPrecision;
     }
 
     private static int getTimePrecision(int timeColumnSize) {
